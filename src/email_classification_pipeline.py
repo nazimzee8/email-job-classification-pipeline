@@ -469,6 +469,124 @@ def _make_feature_distribution_figure(df: pd.DataFrame, features: List[str]) -> 
     return fig
 
 
+def _make_feature_class_heatmap(df: pd.DataFrame, features: List[str]) -> plt.Figure:
+    chosen = features[: min(10, len(features))]
+    class_means = (
+        df.groupby("is_job")[chosen]
+        .mean()
+        .rename(index={0: "Not Job", 1: "Job"})
+    )
+    fig, ax = plt.subplots(figsize=(12, 4.8))
+    sns.heatmap(class_means, annot=True, fmt=".3f", cmap="crest", linewidths=0.4, ax=ax)
+    ax.set_title("Average Feature Levels Across Positive vs. Negative Emails")
+    ax.set_xlabel("Feature")
+    ax.set_ylabel("Class")
+    ax.tick_params(axis="x", rotation=25)
+    return fig
+
+
+def _make_feature_gap_figure(df: pd.DataFrame, features: List[str]) -> plt.Figure:
+    chosen = features[: min(10, len(features))]
+    comparison = df.groupby("is_job")[chosen].mean().T
+    comparison.columns = ["Not Job", "Job"]
+    comparison["gap"] = (comparison["Job"] - comparison["Not Job"]).abs()
+    comparison = comparison.sort_values("gap", ascending=True)
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+    y_positions = np.arange(len(comparison))
+    ax.hlines(y=y_positions, xmin=comparison["Not Job"], xmax=comparison["Job"], color="#94a3b8", linewidth=2.5)
+    ax.scatter(comparison["Not Job"], y_positions, color="#f97316", s=80, label="Not Job", zorder=3)
+    ax.scatter(comparison["Job"], y_positions, color="#2563eb", s=80, label="Job", zorder=3)
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(comparison.index)
+    ax.set_title("Feature Mean Gaps Between Positive and Negative Emails")
+    ax.set_xlabel("Average Feature Value")
+    ax.set_ylabel("Feature")
+    ax.legend(loc="lower right")
+    ax.grid(axis="x", linestyle="--", alpha=0.25)
+    return fig
+
+
+def _make_negative_similarity_figure(df: pd.DataFrame, features: List[str]) -> plt.Figure:
+    chosen = features[: min(6, len(features))]
+    scaled_values = StandardScaler().fit_transform(df[chosen])
+    scaled = pd.DataFrame(scaled_values, columns=chosen, index=df.index)
+
+    positive_mask = df["is_job"] == 1
+    negative_mask = df["is_job"] == 0
+    positive_centroid = scaled.loc[positive_mask, chosen].mean()
+    negative_distances = np.sqrt(((scaled.loc[negative_mask, chosen] - positive_centroid) ** 2).sum(axis=1))
+
+    near_threshold = negative_distances.quantile(0.25)
+    far_threshold = negative_distances.quantile(0.75)
+    segment_map = pd.Series("Other Negatives", index=df.index)
+    segment_map.loc[positive_mask] = "Positive Emails"
+    segment_map.loc[negative_distances.index[negative_distances <= near_threshold]] = "Similar Negatives"
+    segment_map.loc[negative_distances.index[negative_distances >= far_threshold]] = "Distant Negatives"
+
+    segment_frame = scaled.copy()
+    segment_frame["segment"] = segment_map
+    segment_profile = (
+        segment_frame[segment_frame["segment"].isin(["Positive Emails", "Similar Negatives", "Distant Negatives"])]
+        .groupby("segment")[chosen]
+        .mean()
+        .reindex(["Positive Emails", "Similar Negatives", "Distant Negatives"])
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5.2), gridspec_kw={"width_ratios": [1.0, 1.1]})
+    axes[0].hist(negative_distances, bins=20, color="#7c3aed", alpha=0.78, edgecolor="white")
+    axes[0].axvline(near_threshold, color="#0f766e", linestyle="--", linewidth=2, label="Similar cutoff")
+    axes[0].axvline(far_threshold, color="#dc2626", linestyle="--", linewidth=2, label="Distant cutoff")
+    axes[0].set_title("How Close Negative Emails Are to the Job-Email Profile")
+    axes[0].set_xlabel("Distance to Positive Centroid")
+    axes[0].set_ylabel("Negative Email Count")
+    axes[0].legend(loc="upper right")
+
+    sns.heatmap(segment_profile, cmap="rocket", center=0, annot=True, fmt=".2f", ax=axes[1])
+    axes[1].set_title("Standardized Feature Profile: Similar vs. Distant Negatives")
+    axes[1].set_xlabel("Feature")
+    axes[1].set_ylabel("Segment")
+    axes[1].tick_params(axis="x", rotation=25)
+    fig.tight_layout()
+    return fig
+
+
+def _make_single_feature_focus_figure(df: pd.DataFrame, feature_name: str) -> plt.Figure:
+    focus_frame = df[[feature_name, "is_job"]].copy()
+    focus_frame["class"] = focus_frame["is_job"].map({0: "Not Job", 1: "Job"})
+
+    fig, axes = plt.subplots(1, 2, figsize=(13.5, 5.0), gridspec_kw={"width_ratios": [1.3, 1.0]})
+    sns.histplot(
+        data=focus_frame,
+        x=feature_name,
+        hue="class",
+        element="step",
+        stat="density",
+        common_norm=False,
+        fill=True,
+        alpha=0.35,
+        palette={"Not Job": "#f97316", "Job": "#2563eb"},
+        ax=axes[0],
+    )
+    axes[0].set_title(f"Distribution of {feature_name} by Class")
+    axes[0].set_xlabel(feature_name)
+    axes[0].set_ylabel("Density")
+
+    sns.boxplot(
+        data=focus_frame,
+        x="class",
+        y=feature_name,
+        palette={"Not Job": "#f97316", "Job": "#2563eb"},
+        ax=axes[1],
+    )
+    axes[1].set_title(f"{feature_name} Spread by Class")
+    axes[1].set_xlabel("Class")
+    axes[1].set_ylabel(feature_name)
+
+    fig.tight_layout()
+    return fig
+
+
 def _make_model_comparison_figure(model_metrics: pd.DataFrame) -> plt.Figure:
     metric_columns = ["accuracy", "precision", "recall", "f1_score", "auc_score"]
     chart_frame = model_metrics[["model"] + metric_columns].melt(id_vars="model", var_name="metric", value_name="score")
@@ -477,15 +595,22 @@ def _make_model_comparison_figure(model_metrics: pd.DataFrame) -> plt.Figure:
     score_span = max(max_score - min_score, 0.0025)
     lower_bound = max(0.0, min_score - (score_span * 0.35))
     upper_bound = min(1.0, max_score + (score_span * 0.2))
+    palette = {
+        "accuracy": "#2563eb",
+        "precision": "#f97316",
+        "recall": "#0f766e",
+        "f1_score": "#7c3aed",
+        "auc_score": "#dc2626",
+    }
 
     fig, ax = plt.subplots(figsize=(13, 6.5))
-    sns.barplot(data=chart_frame, x="model", y="score", hue="metric", ax=ax, palette="viridis")
+    sns.barplot(data=chart_frame, x="model", y="score", hue="metric", ax=ax, palette=palette)
     ax.set_title("Five-Fold Cross-Validation Metric Comparison (Precision Zoom)")
     ax.set_xlabel("Model")
     ax.set_ylabel("Mean Score")
     ax.set_ylim(lower_bound, upper_bound)
     ax.tick_params(axis="x", rotation=20)
-    ax.legend(loc="lower left", ncol=2)
+    ax.legend(loc="lower left", ncol=3)
 
     for patch in ax.patches:
         height = patch.get_height()
@@ -562,10 +687,11 @@ def generate_figures(
         "feature_weights": _make_feature_weight_figure(feature_weights),
         "selected_feature_correlation": _make_correlation_heatmap(correlation_matrix, top_features),
         "feature_distribution": _make_feature_distribution_figure(filtered_features, top_features),
+        "feature_class_heatmap": _make_feature_class_heatmap(filtered_features, top_features),
+        "feature_gap": _make_feature_gap_figure(filtered_features, top_features),
+        "negative_similarity": _make_negative_similarity_figure(filtered_features, top_features),
         "model_comparison": _make_model_comparison_figure(model_metrics),
     }
-
-
 def persist_artifacts(artifacts: PipelineArtifacts, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     artifacts.model_metrics.to_csv(output_dir / "model_metrics.csv", index=False)
@@ -848,6 +974,9 @@ def streamlit_main() -> None:
         "Weighted Feature Importance Dashboard": artifacts.figures["feature_weights"],
         "Selected Feature Correlation Dashboard": artifacts.figures["selected_feature_correlation"],
         "Feature Distribution by Class Dashboard": artifacts.figures["feature_distribution"],
+        "Feature Class Heatmap Dashboard": artifacts.figures["feature_class_heatmap"],
+        "Feature Mean Gap Dashboard": artifacts.figures["feature_gap"],
+        "Negative Similarity Dashboard": artifacts.figures["negative_similarity"],
         "Precise Model Metric Comparison Dashboard": filtered_model_figure,
     }
     for shap_name, shap_figure in artifacts.shap_figures.items():
@@ -882,9 +1011,15 @@ def streamlit_main() -> None:
     with stat_row[4]:
         _render_stat_card("Positive Rate", _format_percent(positive_ratio), f"{summary['positive_class_count']} job emails after preprocessing")
 
-    model_tab, data_tab = st.tabs(["Model", "Data"])
+    st.markdown("#### Workspace")
+    view_mode = st.radio(
+        "Workspace",
+        options=["Model", "Data"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    with model_tab:
+    if view_mode == "Model":
         _render_section_chip("Hyper-Precise Comparison")
         controls_left, controls_right = st.columns([1.35, 1.0])
         with controls_left:
@@ -917,8 +1052,40 @@ def streamlit_main() -> None:
         st.pyplot(filtered_model_figure, clear_figure=False)
         st.caption("The y-axis is zoomed to the observed score range and every bar is labeled to six decimal places for tighter visual comparison.")
 
-    with data_tab:
+    if view_mode == "Data":
         _render_section_chip("Searchable Visual Explorer")
+        feature_focus = st.selectbox(
+            "Inspect one feature closely",
+            options=artifacts.feature_weights["feature"].tolist(),
+            index=0,
+            help="Choose any engineered feature to compare positive vs. negative email behavior directly.",
+        )
+        focus_figure = _make_single_feature_focus_figure(artifacts.feature_frame, feature_focus)
+        focus_summary = (
+            artifacts.feature_frame.groupby("is_job")[feature_focus]
+            .agg(["mean", "median", "std", "min", "max"])
+            .rename(index={0: "Not Job", 1: "Job"})
+            .reset_index(names="class")
+        )
+        for column in ["mean", "median", "std", "min", "max"]:
+            focus_summary[column] = focus_summary[column].map(_format_metric)
+
+        focus_left, focus_right = st.columns([1.3, 1.0])
+        with focus_left:
+            st.markdown("#### Feature spotlight")
+            st.pyplot(focus_figure, clear_figure=False)
+        with focus_right:
+            st.markdown("#### Feature summary by class")
+            st.dataframe(focus_summary, use_container_width=True, hide_index=True)
+
+        matrix_left, matrix_right = st.columns(2)
+        with matrix_left:
+            st.markdown("#### Correlation matrix spotlight")
+            st.pyplot(artifacts.figures["selected_feature_correlation"], clear_figure=False)
+        with matrix_right:
+            st.markdown("#### Feature weight spotlight")
+            st.pyplot(artifacts.figures["feature_weights"], clear_figure=False)
+
         st.markdown("#### Jump directly to a dashboard or SHAP view")
         selected_plot_name = st.selectbox(
             "Search and choose a plot",
@@ -1004,6 +1171,10 @@ if st is not None and "__streamlit__" not in dir(st):
 else:
     if __name__ == "__main__":
         cli_main()
+
+
+
+
 
 
 
