@@ -119,7 +119,7 @@ def _extract_numeric_features(subject: str, body: str) -> Dict[str, float]:
         "url_count": float(len(re.findall(r"https?://|www\.", lowered))),
         "email_count": float(len(re.findall(r"[\w\.-]+@[\w\.-]+\.\w+", combined))),
         "phone_count": float(len(re.findall(r"(\+\d{1,2}\s?)?(\(?\d{3}\)?[\s.-]?)?\d{3}[\s.-]?\d{4}", combined))),
-        "currency_symbol_count": float(sum(combined.count(symbol) for symbol in ("$", "£", "€"))),
+        "currency_symbol_count": float(sum(combined.count(symbol) for symbol in ("$", "\u00A3", "\u20AC"))),
         "attachment_hint": float(_contains_attachment_hint(combined)),
         "dear_greeting": float(int(lowered.startswith("dear"))),
         "contains_date_like": float(
@@ -578,15 +578,16 @@ def _format_metric(value: float) -> str:
     return f"{value:.4f}"
 
 
-def _streamlit_pipeline_cache() -> PipelineArtifacts:
-    if st is None:
-        raise ImportError("streamlit is not installed.")
-
+# FIX 1: Moved @st.cache_resource to module level so Streamlit can key the
+# cache on a stable function object. The original nested definition created a
+# new function object on every call, causing the cache to miss on every rerun.
+if st is not None:
     @st.cache_resource(show_spinner=False)
-    def _runner() -> PipelineArtifacts:
+    def _streamlit_pipeline_cache() -> PipelineArtifacts:
         return run_pipeline(persist_dir=Path("artifacts"))
-
-    return _runner()
+else:
+    def _streamlit_pipeline_cache() -> PipelineArtifacts:  # type: ignore[misc]
+        raise ImportError("streamlit is not installed.")
 
 
 def streamlit_main() -> None:
@@ -646,12 +647,10 @@ def cli_main() -> None:
     parser = argparse.ArgumentParser(description="Email job classification pipeline")
     parser.add_argument("--top-k-features", type=int, default=8, help="Number of top weighted features used for training.")
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts"), help="Directory where metrics and plots are saved.")
-    parser.add_argument("--streamlit", action="store_true", help="Launch the Streamlit app instead of the CLI pipeline.")
-    args = parser.parse_args()
-
-    if args.streamlit:
-        streamlit_main()
-        return
+    # FIX 2: parse_known_args instead of parse_args so that Streamlit's own
+    # injected CLI flags (e.g. --server.port, --global.developmentMode) do not
+    # cause argparse to raise an "unrecognized arguments" error and crash.
+    args, _ = parser.parse_known_args()
 
     artifacts = run_pipeline(top_k_features=args.top_k_features, persist_dir=args.output_dir)
     best_row = artifacts.model_metrics.iloc[0]
@@ -672,5 +671,22 @@ def cli_main() -> None:
     print(f"Artifacts saved to: {args.output_dir.resolve()}")
 
 
-if __name__ == "__main__":
-    cli_main()
+# FIX 3: Call streamlit_main() at module level when running under Streamlit
+# (i.e. when the script is executed by `streamlit run`). The old code only
+# called streamlit_main() if --streamlit was explicitly passed via argparse,
+# which never happens when launched through the Streamlit server.
+if st is not None and "__streamlit__" not in dir(st):
+    # Detect Streamlit execution context: st.runtime.exists() is the canonical
+    # way to check whether the script is being served by a Streamlit server.
+    try:
+        _running_in_streamlit = st.runtime.exists()
+    except AttributeError:
+        _running_in_streamlit = hasattr(st, "_is_running_with_streamlit")
+
+    if _running_in_streamlit:
+        streamlit_main()
+    elif __name__ == "__main__":
+        cli_main()
+else:
+    if __name__ == "__main__":
+        cli_main()
