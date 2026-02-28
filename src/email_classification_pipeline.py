@@ -1,12 +1,18 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+if "MPLCONFIGDIR" not in os.environ:
+    _mpl_config_dir = os.path.join(os.getcwd(), ".mplconfig")
+    os.makedirs(_mpl_config_dir, exist_ok=True)
+    os.environ["MPLCONFIGDIR"] = _mpl_config_dir
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -151,6 +157,16 @@ def _extract_numeric_features(subject: str, body: str) -> Dict[str, float]:
     return features
 
 
+def _normalize_labels(value: Any) -> List[str]:
+    if isinstance(value, np.ndarray):
+        return [str(item) for item in value.tolist()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value]
+    if pd.isna(value):
+        return []
+    return [str(value)]
+
+
 def load_email_dataframe(dataset_name: str = DATASET_NAME) -> pd.DataFrame:
     if load_dataset is None:
         raise ImportError("The `datasets` package is required to load the Hugging Face dataset.") from DATASETS_IMPORT_ERROR
@@ -159,10 +175,9 @@ def load_email_dataframe(dataset_name: str = DATASET_NAME) -> pd.DataFrame:
     df = raw.to_pandas()
     df["subject"] = df["subject"].astype("string")
     df["body"] = df["body"].astype("string")
-    df["labels"] = df["labels"].apply(lambda value: value if isinstance(value, list) else [])
+    df["labels"] = df["labels"].apply(_normalize_labels)
     df["is_job"] = df["labels"].apply(lambda labels: int(POSITIVE_LABEL in labels))
     return df
-
 
 def preprocess_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     working = df.copy()
@@ -175,7 +190,7 @@ def preprocess_dataframe(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]
 
     working["subject"] = working["subject"].fillna("")
     working["body"] = working["body"].fillna("")
-    working["labels"] = working["labels"].apply(lambda value: value if isinstance(value, list) else [])
+    working["labels"] = working["labels"].apply(_normalize_labels)
     working["text"] = (working["subject"].astype(str) + " " + working["body"].astype(str)).str.strip()
 
     duplicate_mask = working.duplicated(subset=["subject", "body"], keep="first")
@@ -200,22 +215,29 @@ def build_feature_frame(df: pd.DataFrame) -> pd.DataFrame:
 
 def filter_outliers(features: pd.DataFrame, target_column: str = "is_job") -> Tuple[pd.DataFrame, Dict[str, Any]]:
     numeric_columns = [column for column in features.columns if column != target_column]
-    q1 = features[numeric_columns].quantile(0.25)
-    q3 = features[numeric_columns].quantile(0.75)
+    target = features[target_column].astype(int)
+    majority_class = int(target.mode().iloc[0])
+    majority_mask = target == majority_class
+    reference_frame = features.loc[majority_mask, numeric_columns]
+    q1 = reference_frame.quantile(0.25)
+    q3 = reference_frame.quantile(0.75)
     iqr = (q3 - q1).replace(0, 1.0)
     lower = q1 - (3.0 * iqr)
     upper = q3 + (3.0 * iqr)
 
     extreme_mask = features[numeric_columns].lt(lower) | features[numeric_columns].gt(upper)
-    outlier_rows = extreme_mask.sum(axis=1) >= 2
+    extreme_feature_count = extreme_mask.sum(axis=1)
+    outlier_rows = (extreme_feature_count >= 2) & majority_mask
 
+    removed_rows = features.loc[outlier_rows, target_column].astype(int)
     summary = {
         "outlier_rows_removed": int(outlier_rows.sum()),
+        "majority_outlier_rows_removed": int((removed_rows == majority_class).sum()),
+        "minority_rows_preserved": int((target != majority_class).sum()),
         "rows_after_outlier_filter": int((~outlier_rows).sum()),
     }
     filtered = features.loc[~outlier_rows].copy()
     return filtered, summary
-
 
 def apply_correlation_filter(
     features: pd.DataFrame,
@@ -223,6 +245,9 @@ def apply_correlation_filter(
     threshold: float = 0.9,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     predictors = features.drop(columns=[target_column])
+    constant_columns = [column for column in predictors.columns if predictors[column].nunique(dropna=False) <= 1]
+    if constant_columns:
+        predictors = predictors.drop(columns=constant_columns)
     corr_matrix = predictors.corr().fillna(0.0)
     upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
     dropped = [column for column in upper_triangle.columns if any(upper_triangle[column].abs() > threshold)]
@@ -231,7 +256,6 @@ def apply_correlation_filter(
     ranking = feature_target_corr.reset_index()
     ranking.columns = ["feature", "abs_target_correlation"]
     return filtered_predictors, corr_matrix, ranking
-
 
 def compute_feature_weights(
     predictors: pd.DataFrame,
@@ -270,7 +294,7 @@ def get_model_registry() -> Dict[str, Any]:
         "Linear Regression": LinearRegression(),
         "LASSO": Lasso(alpha=0.001, random_state=RANDOM_STATE, max_iter=10000),
         "Ridge": Ridge(alpha=1.0, random_state=RANDOM_STATE),
-        "CART": DecisionTreeClassifier(max_depth=6, min_samples_leaf=4, random_state=RANDOM_STATE),
+        "CART": DecisionTreeClassifier(max_depth=6, min_samples_leaf=4, random_state=RANDOM_STATE, class_weight="balanced"),
         "Random Forest": RandomForestClassifier(
             n_estimators=300,
             max_depth=10,
@@ -287,17 +311,28 @@ def get_model_registry() -> Dict[str, Any]:
             num_leaves=31,
             subsample=0.9,
             colsample_bytree=0.9,
+            class_weight="balanced",
             random_state=RANDOM_STATE,
+            verbose=-1,
         )
     return models
 
 
 def _predict_scores(model: Any, x_test: pd.DataFrame) -> np.ndarray:
     if hasattr(model, "predict_proba"):
-        return model.predict_proba(x_test)[:, 1]
+        probabilities = np.asarray(model.predict_proba(x_test), dtype=float)
+        if probabilities.ndim == 1:
+            return np.clip(probabilities, 0.0, 1.0)
+        if probabilities.shape[1] == 1:
+            classes = np.asarray(getattr(model, "classes_", [0]))
+            only_class = int(classes[0]) if classes.size else 0
+            fill_value = 1.0 if only_class == 1 else 0.0
+            return np.full(len(x_test), fill_value, dtype=float)
+        classes = list(getattr(model, "classes_", range(probabilities.shape[1])))
+        positive_index = classes.index(1) if 1 in classes else min(1, probabilities.shape[1] - 1)
+        return probabilities[:, positive_index]
     raw_predictions = np.asarray(model.predict(x_test), dtype=float)
     return np.clip(raw_predictions, 0.0, 1.0)
-
 
 def evaluate_models(
     predictors: pd.DataFrame,
@@ -307,7 +342,14 @@ def evaluate_models(
 ) -> pd.DataFrame:
     x = predictors[top_features]
     y = target.astype(int)
-    splitter = StratifiedKFold(n_splits=folds, shuffle=True, random_state=RANDOM_STATE)
+    class_counts = y.value_counts()
+    if y.nunique() < 2:
+        raise ValueError("The derived target contains only one class after preprocessing. Check label normalization and filtering.")
+    minority_class_count = int(class_counts.min())
+    if minority_class_count < 2:
+        raise ValueError("At least two samples are required in each class after preprocessing to run stratified cross-validation.")
+    effective_folds = min(folds, minority_class_count)
+    splitter = StratifiedKFold(n_splits=effective_folds, shuffle=True, random_state=RANDOM_STATE)
     model_registry = get_model_registry()
     rows: List[Dict[str, Any]] = []
     scale_models = {"Linear Regression", "LASSO", "Ridge"}
@@ -342,7 +384,7 @@ def evaluate_models(
                     "precision": precision_score(y_test, predictions, zero_division=0),
                     "recall": recall_score(y_test, predictions, zero_division=0),
                     "f1_score": f1_score(y_test, predictions, zero_division=0),
-                    "auc_score": roc_auc_score(y_test, scores),
+                    "auc_score": 0.5 if y_test.nunique() < 2 else roc_auc_score(y_test, scores),
                 }
             )
 
@@ -364,7 +406,6 @@ def evaluate_models(
         )
 
     return pd.DataFrame(rows).sort_values(["f1_score", "auc_score"], ascending=False).reset_index(drop=True)
-
 
 def fit_best_model(
     predictors: pd.DataFrame,
@@ -690,3 +731,4 @@ if st is not None and "__streamlit__" not in dir(st):
 else:
     if __name__ == "__main__":
         cli_main()
+
