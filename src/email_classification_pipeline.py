@@ -472,16 +472,36 @@ def _make_feature_distribution_figure(df: pd.DataFrame, features: List[str]) -> 
 def _make_model_comparison_figure(model_metrics: pd.DataFrame) -> plt.Figure:
     metric_columns = ["accuracy", "precision", "recall", "f1_score", "auc_score"]
     chart_frame = model_metrics[["model"] + metric_columns].melt(id_vars="model", var_name="metric", value_name="score")
-    fig, ax = plt.subplots(figsize=(12, 6))
-    sns.barplot(data=chart_frame, x="model", y="score", hue="metric", ax=ax)
-    ax.set_title("Five-Fold Cross-Validation Metric Comparison")
+    min_score = float(chart_frame["score"].min())
+    max_score = float(chart_frame["score"].max())
+    score_span = max(max_score - min_score, 0.0025)
+    lower_bound = max(0.0, min_score - (score_span * 0.35))
+    upper_bound = min(1.0, max_score + (score_span * 0.2))
+
+    fig, ax = plt.subplots(figsize=(13, 6.5))
+    sns.barplot(data=chart_frame, x="model", y="score", hue="metric", ax=ax, palette="viridis")
+    ax.set_title("Five-Fold Cross-Validation Metric Comparison (Precision Zoom)")
     ax.set_xlabel("Model")
     ax.set_ylabel("Mean Score")
+    ax.set_ylim(lower_bound, upper_bound)
     ax.tick_params(axis="x", rotation=20)
-    ax.legend(loc="lower right")
+    ax.legend(loc="lower left", ncol=2)
+
+    for patch in ax.patches:
+        height = patch.get_height()
+        ax.annotate(
+            f"{height:.6f}",
+            (patch.get_x() + (patch.get_width() / 2.0), height),
+            ha="center",
+            va="bottom",
+            fontsize=7,
+            rotation=90,
+            xytext=(0, 3),
+            textcoords="offset points",
+        )
+
+    ax.grid(axis="y", linestyle="--", alpha=0.25)
     return fig
-
-
 def create_shap_figures(
     fitted_model: Any,
     predictors: pd.DataFrame,
@@ -822,6 +842,19 @@ def streamlit_main() -> None:
     cleaned_export["labels"] = cleaned_export["labels"].apply(lambda value: ", ".join(value))
     cleaned_export_csv = cleaned_export.to_csv(index=False).encode("utf-8")
 
+    filtered_model_figure = _make_model_comparison_figure(filtered_metrics)
+    plot_catalog: Dict[str, plt.Figure] = {
+        "Class Distribution Dashboard": artifacts.figures["class_distribution"],
+        "Weighted Feature Importance Dashboard": artifacts.figures["feature_weights"],
+        "Selected Feature Correlation Dashboard": artifacts.figures["selected_feature_correlation"],
+        "Feature Distribution by Class Dashboard": artifacts.figures["feature_distribution"],
+        "Precise Model Metric Comparison Dashboard": filtered_model_figure,
+    }
+    for shap_name, shap_figure in artifacts.shap_figures.items():
+        pretty_name = shap_name.replace("_", " ").title()
+        plot_catalog[f"{pretty_name} SHAP Plot"] = shap_figure
+    plot_options = list(plot_catalog.keys())
+
     st.markdown(
         f"""
         <div class="hero-shell">
@@ -829,7 +862,7 @@ def streamlit_main() -> None:
             <div class="hero-copy">
                 A brighter view of the full pipeline: cleaning, feature selection, cross-validation, exact score inspection, and explanation plots.
                 Built on <strong>{DATASET_NAME}</strong> with <strong>{summary['rows_after_outlier_filter']}</strong> retained rows and
-                a preserved positive class rate of <strong>{_format_percent(positive_ratio)}</strong>. The live comparison table is now filtered to
+                a preserved positive class rate of <strong>{_format_percent(positive_ratio)}</strong>. The live comparison table is filtered to
                 <strong>{len(selected_models)}</strong> model(s) and ranked by <strong>{ranking_metric}</strong>.
             </div>
         </div>
@@ -849,38 +882,11 @@ def streamlit_main() -> None:
     with stat_row[4]:
         _render_stat_card("Positive Rate", _format_percent(positive_ratio), f"{summary['positive_class_count']} job emails after preprocessing")
 
-    overview_tab, model_tab, visuals_tab, data_tab = st.tabs([
-        "Overview",
-        "Model Lab",
-        "Visual Stories",
-        "Data Trace",
-    ])
-
-    with overview_tab:
-        _render_section_chip("Pipeline Snapshot")
-        overview_left, overview_right = st.columns([1.2, 1.0])
-        with overview_left:
-            st.markdown("#### What the pipeline kept")
-            summary_frame = pd.DataFrame(
-                [
-                    ("Input rows", f"{summary['input_rows']:,}"),
-                    ("Duplicate rows removed", f"{summary['duplicate_rows_removed']:,}"),
-                    ("Empty rows removed", f"{summary['empty_rows_removed']:,}"),
-                    ("Majority outliers removed", f"{summary.get('majority_outlier_rows_removed', 0):,}"),
-                    ("Minority rows preserved", f"{summary.get('minority_rows_preserved', 0):,}"),
-                    ("Positive class label", summary["positive_class_label"]),
-                ],
-                columns=["Checkpoint", "Exact Value"],
-            )
-            st.dataframe(summary_frame, use_container_width=True, hide_index=True)
-        with overview_right:
-            st.markdown("#### Best-model scorecard")
-            st.dataframe(scorecard[["exact", "percent"]], use_container_width=True)
-            st.caption("Exact values use eight decimal places so even tight model gaps remain visible.")
+    model_tab, data_tab = st.tabs(["Model", "Data"])
 
     with model_tab:
         _render_section_chip("Hyper-Precise Comparison")
-        controls_left, controls_right = st.columns([1.3, 1.0])
+        controls_left, controls_right = st.columns([1.35, 1.0])
         with controls_left:
             st.markdown("#### Full model leaderboard")
             st.dataframe(precise_model_table, use_container_width=True, hide_index=True)
@@ -894,6 +900,8 @@ def streamlit_main() -> None:
                 use_container_width=True,
             )
             st.caption("The export respects the active model filter and ranking control from the sidebar.")
+            st.markdown("#### Best-model scorecard")
+            st.dataframe(scorecard[["exact", "percent"]], use_container_width=True)
         st.markdown("#### Metric spotlight")
         spotlight_columns = st.columns(5)
         for idx, metric_name in enumerate(metric_columns):
@@ -905,30 +913,23 @@ def streamlit_main() -> None:
                     delta=f"Leader: {top_model['model']}",
                 )
         st.caption("Each `*_gap_from_best` field in the table is the exact difference from the best score for that metric.")
-
-    with visuals_tab:
-        _render_section_chip("Plot Gallery")
-        visual_left, visual_right = st.columns(2)
-        with visual_left:
-            st.markdown("#### Distribution and Feature Signals")
-            st.pyplot(artifacts.figures["class_distribution"], clear_figure=False)
-            st.pyplot(artifacts.figures["feature_weights"], clear_figure=False)
-            st.pyplot(artifacts.figures["feature_distribution"], clear_figure=False)
-        with visual_right:
-            st.markdown("#### Correlation and Model Faceoff")
-            st.pyplot(artifacts.figures["selected_feature_correlation"], clear_figure=False)
-            st.pyplot(artifacts.figures["model_comparison"], clear_figure=False)
-            if artifacts.shap_figures:
-                for name, figure in artifacts.shap_figures.items():
-                    st.markdown(f"**{name.replace('_', ' ').title()}**")
-                    st.pyplot(figure, clear_figure=False)
-            else:
-                st.info("SHAP figures were skipped because the `shap` package is unavailable or the explainer failed.")
+        st.markdown("#### Visual metric comparison")
+        st.pyplot(filtered_model_figure, clear_figure=False)
+        st.caption("The y-axis is zoomed to the observed score range and every bar is labeled to six decimal places for tighter visual comparison.")
 
     with data_tab:
-        _render_section_chip("Feature and Record Trace")
-        data_left, data_right = st.columns([1.1, 1.2])
-        with data_left:
+        _render_section_chip("Searchable Visual Explorer")
+        st.markdown("#### Jump directly to a dashboard or SHAP view")
+        selected_plot_name = st.selectbox(
+            "Search and choose a plot",
+            options=plot_options,
+            index=0,
+            help="Type in the dropdown to quickly find a specific dashboard or SHAP plot.",
+        )
+        st.pyplot(plot_catalog[selected_plot_name], clear_figure=False)
+
+        details_left, details_right = st.columns([1.05, 1.25])
+        with details_left:
             st.markdown("#### Weighted feature ranking")
             feature_table = artifacts.feature_weights.copy()
             numeric_feature_columns = [column for column in feature_table.columns if column != "feature"]
@@ -942,7 +943,7 @@ def streamlit_main() -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
-        with data_right:
+        with details_right:
             st.markdown("#### Cleaned email preview")
             preview = cleaned_export[["subject", "body", "labels", "is_job"]].copy().head(20)
             preview["is_job"] = preview["is_job"].map({0: "Not Job", 1: "Job"})
@@ -954,8 +955,8 @@ def streamlit_main() -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
-            st.markdown("#### Preprocessing JSON")
-            st.json(summary)
+        st.markdown("#### Preprocessing JSON")
+        st.json(summary)
 def cli_main() -> None:
     parser = argparse.ArgumentParser(description="Email job classification pipeline")
     parser.add_argument("--top-k-features", type=int, default=8, help="Number of top weighted features used for training.")
@@ -1003,6 +1004,7 @@ if st is not None and "__streamlit__" not in dir(st):
 else:
     if __name__ == "__main__":
         cli_main()
+
 
 
 
