@@ -616,8 +616,137 @@ def run_pipeline(
 
 
 def _format_metric(value: float) -> str:
-    return f"{value:.4f}"
+    return f"{value:.8f}"
 
+
+def _format_percent(value: float) -> str:
+    return f"{value * 100:.6f}%"
+
+
+def _build_precise_model_table(model_metrics: pd.DataFrame) -> pd.DataFrame:
+    metric_columns = ["accuracy", "precision", "recall", "f1_score", "auc_score"]
+    best_values = model_metrics[metric_columns].max()
+    table = model_metrics.copy()
+    table.insert(0, "rank", range(1, len(table) + 1))
+    for column in metric_columns:
+        table[f"{column}_gap_from_best"] = best_values[column] - table[column]
+    ordered_columns = [
+        "rank",
+        "model",
+        "accuracy",
+        "accuracy_gap_from_best",
+        "accuracy_std",
+        "precision",
+        "precision_gap_from_best",
+        "precision_std",
+        "recall",
+        "recall_gap_from_best",
+        "recall_std",
+        "f1_score",
+        "f1_score_gap_from_best",
+        "f1_score_std",
+        "auc_score",
+        "auc_score_gap_from_best",
+        "auc_score_std",
+    ]
+    table = table[ordered_columns]
+    for column in [name for name in table.columns if name not in {"rank", "model"}]:
+        table[column] = table[column].map(_format_metric)
+    return table
+
+
+def _inject_streamlit_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background: radial-gradient(circle at top right, #fde68a 0%, #fff7ed 32%, #ecfeff 68%, #eff6ff 100%);
+        }
+        .block-container {
+            padding-top: 1.35rem;
+            padding-bottom: 2.25rem;
+        }
+        .hero-shell {
+            background: linear-gradient(135deg, rgba(15,118,110,0.96), rgba(37,99,235,0.92));
+            border-radius: 24px;
+            padding: 1.3rem 1.5rem;
+            color: white;
+            box-shadow: 0 18px 40px rgba(30, 41, 59, 0.16);
+            margin-bottom: 1rem;
+        }
+        .hero-title {
+            font-size: 2rem;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            margin-bottom: 0.35rem;
+        }
+        .hero-copy {
+            font-size: 0.98rem;
+            line-height: 1.5;
+            opacity: 0.94;
+        }
+        .stat-card {
+            background: rgba(255, 255, 255, 0.88);
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 18px;
+            padding: 0.95rem 1rem;
+            box-shadow: 0 8px 26px rgba(15, 23, 42, 0.06);
+        }
+        .stat-label {
+            font-size: 0.78rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #475569;
+            margin-bottom: 0.35rem;
+        }
+        .stat-value {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: #0f172a;
+            line-height: 1.1;
+        }
+        .stat-subtext {
+            margin-top: 0.25rem;
+            font-size: 0.8rem;
+            color: #64748b;
+        }
+        .section-chip {
+            display: inline-block;
+            padding: 0.28rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #0f766e;
+            background: rgba(20, 184, 166, 0.12);
+            margin-bottom: 0.5rem;
+        }
+        div[data-testid="stMetricValue"] {
+            font-size: 1.25rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_stat_card(label: str, value: str, subtext: str) -> None:
+    st.markdown(
+        f"""
+        <div class="stat-card">
+            <div class="stat-label">{label}</div>
+            <div class="stat-value">{value}</div>
+            <div class="stat-subtext">{subtext}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_section_chip(label: str) -> None:
+    st.markdown(f"<div class=\"section-chip\">{label}</div>", unsafe_allow_html=True)
 
 # FIX 1: Moved @st.cache_resource to module level so Streamlit can key the
 # cache on a stable function object. The original nested definition created a
@@ -635,55 +764,198 @@ def streamlit_main() -> None:
     if st is None:
         raise ImportError("streamlit is required to launch the dashboard.")
 
-    st.set_page_config(page_title="Email Job Classification Pipeline", layout="wide")
-    st.title("Email Job vs. Non-Job Classification")
-    st.caption("Dataset: imnim/multiclass-email-classification")
+    st.set_page_config(
+        page_title="Email Job Classification Pipeline",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
+    _inject_streamlit_theme()
 
     with st.spinner("Running preprocessing, feature engineering, and model evaluation..."):
         artifacts = _streamlit_pipeline_cache()
 
     summary = artifacts.preprocessing_summary
-    top_row = st.columns(4)
-    top_row[0].metric("Rows After Cleaning", summary["rows_after_basic_cleaning"])
-    top_row[1].metric("Rows After Outlier Filter", summary["rows_after_outlier_filter"])
-    top_row[2].metric("Highest Weight Feature", summary["highest_weight_feature"])
-    top_row[3].metric("Best Model", summary["best_model"])
+    metric_columns = ["accuracy", "precision", "recall", "f1_score", "auc_score"]
+    all_models = artifacts.model_metrics["model"].tolist()
+    default_models = all_models[: min(4, len(all_models))]
 
-    st.subheader("Preprocessing Summary")
-    st.json(summary)
+    with st.sidebar:
+        st.markdown("### Run Snapshot")
+        st.caption("Exact preprocessing numbers for quick auditability.")
+        st.metric("Rows After Cleaning", f"{summary['rows_after_basic_cleaning']:,}")
+        st.metric("Rows After Filter", f"{summary['rows_after_outlier_filter']:,}")
+        st.metric("Positive Class", f"{summary['positive_class_count']:,}")
+        st.metric("Negative Class", f"{summary['negative_class_count']:,}")
+        st.markdown("### Model Playground")
+        selected_models = st.multiselect(
+            "Choose models to compare",
+            options=all_models,
+            default=default_models,
+        )
+        if not selected_models:
+            selected_models = all_models
+        ranking_metric = st.selectbox(
+            "Primary ranking metric",
+            options=metric_columns,
+            index=metric_columns.index("f1_score"),
+        )
+        st.markdown("### Selected Features")
+        for feature_name in summary["selected_features"]:
+            st.write(f"- `{feature_name}`")
 
-    st.subheader("Feature Ranking")
-    st.dataframe(artifacts.feature_weights, use_container_width=True)
+    filtered_metrics = artifacts.model_metrics.loc[
+        artifacts.model_metrics["model"].isin(selected_models)
+    ].copy()
+    filtered_metrics.sort_values([ranking_metric, "auc_score"], ascending=False, inplace=True)
+    filtered_metrics.reset_index(drop=True, inplace=True)
+    precise_model_table = _build_precise_model_table(filtered_metrics)
+    best_row = filtered_metrics.iloc[0]
+    positive_ratio = summary["positive_class_count"] / max(summary["rows_after_outlier_filter"], 1)
+    scorecard = best_row[metric_columns].to_frame(name="value")
+    scorecard["exact"] = scorecard["value"].map(_format_metric)
+    scorecard["percent"] = scorecard["value"].map(_format_percent)
+    model_metrics_csv = filtered_metrics.to_csv(index=False).encode("utf-8")
 
-    st.subheader("Model Performance (5-Fold Cross Validation)")
-    display_metrics = artifacts.model_metrics.copy()
-    for column in ["accuracy", "precision", "recall", "f1_score", "auc_score"]:
-        display_metrics[column] = display_metrics[column].map(_format_metric)
-    st.dataframe(display_metrics, use_container_width=True)
+    feature_export = artifacts.feature_weights.copy()
+    feature_export_csv = feature_export.to_csv(index=False).encode("utf-8")
+    cleaned_export = artifacts.cleaned_dataset.copy()
+    cleaned_export["labels"] = cleaned_export["labels"].apply(lambda value: ", ".join(value))
+    cleaned_export_csv = cleaned_export.to_csv(index=False).encode("utf-8")
 
-    st.subheader("Dashboards")
-    for title, key in [
-        ("Class Distribution", "class_distribution"),
-        ("Weighted Feature Importance", "feature_weights"),
-        ("Selected Feature Correlation", "selected_feature_correlation"),
-        ("Feature Distribution by Class", "feature_distribution"),
-        ("Model Comparison", "model_comparison"),
-    ]:
-        st.markdown(f"**{title}**")
-        st.pyplot(artifacts.figures[key], clear_figure=False)
+    st.markdown(
+        f"""
+        <div class="hero-shell">
+            <div class="hero-title">Email Classifier Control Room</div>
+            <div class="hero-copy">
+                A brighter view of the full pipeline: cleaning, feature selection, cross-validation, exact score inspection, and explanation plots.
+                Built on <strong>{DATASET_NAME}</strong> with <strong>{summary['rows_after_outlier_filter']}</strong> retained rows and
+                a preserved positive class rate of <strong>{_format_percent(positive_ratio)}</strong>. The live comparison table is now filtered to
+                <strong>{len(selected_models)}</strong> model(s) and ranked by <strong>{ranking_metric}</strong>.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    if artifacts.shap_figures:
-        st.subheader("SHAP Explanations")
-        for name, figure in artifacts.shap_figures.items():
-            st.markdown(f"**{name.replace('_', ' ').title()}**")
-            st.pyplot(figure, clear_figure=False)
-    else:
-        st.info("SHAP figures were skipped because the `shap` package is unavailable or the explainer failed.")
+    stat_row = st.columns(5)
+    with stat_row[0]:
+        _render_stat_card("Best Model", str(best_row["model"]), f"Leader on {ranking_metric}")
+    with stat_row[1]:
+        _render_stat_card("Best F1", _format_metric(float(best_row["f1_score"])), _format_percent(float(best_row["f1_score"])))
+    with stat_row[2]:
+        _render_stat_card("Best AUC", _format_metric(float(best_row["auc_score"])), _format_percent(float(best_row["auc_score"])))
+    with stat_row[3]:
+        _render_stat_card("Lead Feature", str(summary["highest_weight_feature"]), "Highest ensemble coefficient weight")
+    with stat_row[4]:
+        _render_stat_card("Positive Rate", _format_percent(positive_ratio), f"{summary['positive_class_count']} job emails after preprocessing")
 
-    st.subheader("Preview of Cleaned Records")
-    st.dataframe(artifacts.cleaned_dataset[["subject", "body", "labels", "is_job"]].head(20), use_container_width=True)
+    overview_tab, model_tab, visuals_tab, data_tab = st.tabs([
+        "Overview",
+        "Model Lab",
+        "Visual Stories",
+        "Data Trace",
+    ])
 
+    with overview_tab:
+        _render_section_chip("Pipeline Snapshot")
+        overview_left, overview_right = st.columns([1.2, 1.0])
+        with overview_left:
+            st.markdown("#### What the pipeline kept")
+            summary_frame = pd.DataFrame(
+                [
+                    ("Input rows", f"{summary['input_rows']:,}"),
+                    ("Duplicate rows removed", f"{summary['duplicate_rows_removed']:,}"),
+                    ("Empty rows removed", f"{summary['empty_rows_removed']:,}"),
+                    ("Majority outliers removed", f"{summary.get('majority_outlier_rows_removed', 0):,}"),
+                    ("Minority rows preserved", f"{summary.get('minority_rows_preserved', 0):,}"),
+                    ("Positive class label", summary["positive_class_label"]),
+                ],
+                columns=["Checkpoint", "Exact Value"],
+            )
+            st.dataframe(summary_frame, use_container_width=True, hide_index=True)
+        with overview_right:
+            st.markdown("#### Best-model scorecard")
+            st.dataframe(scorecard[["exact", "percent"]], use_container_width=True)
+            st.caption("Exact values use eight decimal places so even tight model gaps remain visible.")
 
+    with model_tab:
+        _render_section_chip("Hyper-Precise Comparison")
+        controls_left, controls_right = st.columns([1.3, 1.0])
+        with controls_left:
+            st.markdown("#### Full model leaderboard")
+            st.dataframe(precise_model_table, use_container_width=True, hide_index=True)
+        with controls_right:
+            st.markdown("#### Export current comparison")
+            st.download_button(
+                label="Download filtered metrics CSV",
+                data=model_metrics_csv,
+                file_name="filtered_model_metrics.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+            st.caption("The export respects the active model filter and ranking control from the sidebar.")
+        st.markdown("#### Metric spotlight")
+        spotlight_columns = st.columns(5)
+        for idx, metric_name in enumerate(metric_columns):
+            top_model = filtered_metrics.iloc[filtered_metrics[metric_name].idxmax()]
+            with spotlight_columns[idx]:
+                st.metric(
+                    metric_name.replace("_", " ").title(),
+                    _format_metric(float(top_model[metric_name])),
+                    delta=f"Leader: {top_model['model']}",
+                )
+        st.caption("Each `*_gap_from_best` field in the table is the exact difference from the best score for that metric.")
+
+    with visuals_tab:
+        _render_section_chip("Plot Gallery")
+        visual_left, visual_right = st.columns(2)
+        with visual_left:
+            st.markdown("#### Distribution and Feature Signals")
+            st.pyplot(artifacts.figures["class_distribution"], clear_figure=False)
+            st.pyplot(artifacts.figures["feature_weights"], clear_figure=False)
+            st.pyplot(artifacts.figures["feature_distribution"], clear_figure=False)
+        with visual_right:
+            st.markdown("#### Correlation and Model Faceoff")
+            st.pyplot(artifacts.figures["selected_feature_correlation"], clear_figure=False)
+            st.pyplot(artifacts.figures["model_comparison"], clear_figure=False)
+            if artifacts.shap_figures:
+                for name, figure in artifacts.shap_figures.items():
+                    st.markdown(f"**{name.replace('_', ' ').title()}**")
+                    st.pyplot(figure, clear_figure=False)
+            else:
+                st.info("SHAP figures were skipped because the `shap` package is unavailable or the explainer failed.")
+
+    with data_tab:
+        _render_section_chip("Feature and Record Trace")
+        data_left, data_right = st.columns([1.1, 1.2])
+        with data_left:
+            st.markdown("#### Weighted feature ranking")
+            feature_table = artifacts.feature_weights.copy()
+            numeric_feature_columns = [column for column in feature_table.columns if column != "feature"]
+            for column in numeric_feature_columns:
+                feature_table[column] = feature_table[column].map(_format_metric)
+            st.dataframe(feature_table, use_container_width=True, hide_index=True)
+            st.download_button(
+                label="Download feature weights CSV",
+                data=feature_export_csv,
+                file_name="feature_weights.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+        with data_right:
+            st.markdown("#### Cleaned email preview")
+            preview = cleaned_export[["subject", "body", "labels", "is_job"]].copy().head(20)
+            preview["is_job"] = preview["is_job"].map({0: "Not Job", 1: "Job"})
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+            st.download_button(
+                label="Download cleaned dataset CSV",
+                data=cleaned_export_csv,
+                file_name="cleaned_email_dataset.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+            st.markdown("#### Preprocessing JSON")
+            st.json(summary)
 def cli_main() -> None:
     parser = argparse.ArgumentParser(description="Email job classification pipeline")
     parser.add_argument("--top-k-features", type=int, default=8, help="Number of top weighted features used for training.")
@@ -731,4 +1003,7 @@ if st is not None and "__streamlit__" not in dir(st):
 else:
     if __name__ == "__main__":
         cli_main()
+
+
+
 

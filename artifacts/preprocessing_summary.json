@@ -1,0 +1,28 @@
+{
+  "input_rows": 2105,
+  "missing_subject_before": 0,
+  "missing_body_before": 0,
+  "missing_labels_before": 0,
+  "duplicate_rows_removed": 1,
+  "empty_rows_removed": 0,
+  "rows_after_basic_cleaning": 2104,
+  "outlier_rows_removed": 23,
+  "majority_outlier_rows_removed": 23,
+  "minority_rows_preserved": 122,
+  "rows_after_outlier_filter": 2081,
+  "positive_class_label": "Job Application",
+  "positive_class_count": 122,
+  "negative_class_count": 1959,
+  "selected_features": [
+    "job_keyword_count",
+    "exclamation_count",
+    "recruiting_keyword_count",
+    "candidate_keyword_count",
+    "business_keyword_count",
+    "non_job_signal_ratio",
+    "punctuation_ratio",
+    "body_length"
+  ],
+  "highest_weight_feature": "job_keyword_count",
+  "best_model": "Random Forest"
+}
