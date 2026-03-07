@@ -13,6 +13,9 @@
   "positive_class_label": "Job Application",
   "positive_class_count": 122,
   "negative_class_count": 1959,
+  "positive_class_ratio": 0.05862566074002883,
+  "train_size": 1664,
+  "test_size": 417,
   "selected_features": [
     "job_keyword_count",
     "exclamation_count",
@@ -24,5 +27,6 @@
     "body_length"
   ],
   "highest_weight_feature": "job_keyword_count",
-  "best_model": "Random Forest"
+  "best_cv_model": "Random Forest",
+  "best_test_model": "Logistic Regression"
 }

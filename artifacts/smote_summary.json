@@ -1,0 +1,9 @@
+{
+  "train_positive_before": 98,
+  "train_negative_before": 1566,
+  "train_total_before": 1664,
+  "train_positive_after": 1566,
+  "train_negative_after": 1566,
+  "train_total_after": 3132,
+  "smote_applied": true
+}
