@@ -1220,7 +1220,10 @@ def _inject_css() -> None:
             #0f172a 0%, #1e1b4b 30%, #172554 65%, #0c4a6e 100%);
         min-height: 100vh;
     }
-    .block-container { padding-top: 1rem; padding-bottom: 2rem; }
+    .block-container {
+        padding-top: 2.5rem !important;
+        padding-bottom: 2rem !important;
+    }
 
     /* ── Force all text dark-on-light inside content cards ─────────── */
     /* Global readable defaults for non-card areas */
@@ -1238,33 +1241,64 @@ def _inject_css() -> None:
     .stApp h1, .stApp h2, .stApp h3,
     .stApp h4, .stApp h5, .stApp h6 { color: #f1f5f9 !important; }
 
-    /* ── Tab navigation bar ────────────────────────────────────────── */
-    div[data-testid="stTabs"] > div:first-child {
-        background: rgba(255,255,255,0.04);
-        border-radius: 14px 14px 0 0;
-        border-bottom: 2px solid rgba(255,255,255,0.10);
-        padding: 0 .5rem;
-        gap: .25rem;
+    /* ══════════════════════════════════════════════════════════════
+       TOP NAVIGATION BAR  (session_state-driven, not st.tabs)
+       ══════════════════════════════════════════════════════════════ */
+
+    /* Nav tray background — scoped to the stVerticalBlock that owns
+       the invisible .nav-anchor span we inject before the buttons.
+       We target the direct child > div > stHorizontalBlock so only
+       the nav columns (not any nested columns in page content) get
+       the tray treatment. */
+    div[data-testid="stVerticalBlock"]:has(.nav-anchor)
+        > div
+        > div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        gap: .5rem !important;
+        align-items: stretch !important;
+        padding: .65rem .75rem !important;
+        background: #0d1526 !important;
+        border: 1.5px solid rgba(56,189,248,0.28) !important;
+        border-radius: 16px !important;
+        box-shadow: 0 6px 32px rgba(0,0,0,0.55),
+                    inset 0 1px 0 rgba(255,255,255,0.06) !important;
+        margin-bottom: 1.8rem !important;
     }
-    button[role="tab"] {
-        color: #94a3b8 !important;
-        font-weight: 700 !important;
-        font-size: .82rem !important;
-        letter-spacing: .03em !important;
-        padding: .65rem 1.1rem !important;
-        border-radius: 10px 10px 0 0 !important;
+
+    /* ── Active nav pill (type="primary") ───────────────────────── */
+    button[data-testid="baseButton-primary"] {
+        background: linear-gradient(135deg,#38bdf8 0%,#818cf8 100%) !important;
+        color: #0f172a !important;
         border: none !important;
-        border-bottom: 3px solid transparent !important;
-        transition: color .2s, background .2s, border-color .2s !important;
+        font-weight: 800 !important;
+        font-size: .83rem !important;
+        letter-spacing: .06em !important;
+        text-transform: uppercase !important;
+        border-radius: 12px !important;
+        padding: .7rem 1rem !important;
+        box-shadow: 0 4px 20px rgba(56,189,248,0.40),
+                    0 1px 4px rgba(0,0,0,0.30) !important;
+        transition: all .18s ease !important;
     }
-    button[role="tab"]:hover {
-        color: #e2e8f0 !important;
-        background: rgba(255,255,255,0.06) !important;
+
+    /* ── Inactive nav pill (type="secondary") ───────────────────── */
+    button[data-testid="baseButton-secondary"] {
+        background: rgba(255,255,255,0.04) !important;
+        color: #64748b !important;
+        border: 1px solid rgba(255,255,255,0.09) !important;
+        font-weight: 700 !important;
+        font-size: .83rem !important;
+        letter-spacing: .06em !important;
+        text-transform: uppercase !important;
+        border-radius: 12px !important;
+        padding: .7rem 1rem !important;
+        transition: all .18s ease !important;
     }
-    button[role="tab"][aria-selected="true"] {
-        color: #38bdf8 !important;
-        background: rgba(56,189,248,0.08) !important;
-        border-bottom: 3px solid #38bdf8 !important;
+    button[data-testid="baseButton-secondary"]:hover {
+        background: rgba(255,255,255,0.10) !important;
+        color: #cbd5e1 !important;
+        border-color: rgba(255,255,255,0.22) !important;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.25) !important;
     }
 
     /* Sidebar */
@@ -1843,13 +1877,13 @@ def _plotly_class_breakdown(feature_frame: pd.DataFrame) -> Any:
 # STREAMLIT  —  TABS
 # ════════════════════════════════════════════════════════════════════════════
 _TAB_META = {
-    "executive":     ("📊", "Executive Summary",            "#38bdf8",
+    "executive":     ("🏠", "Home",            "#38bdf8",
                       "High-level pipeline results, champion models, and key findings"),
-    "descriptive":   ("🔍", "Descriptive Analytics",        "#34d399",
+    "descriptive":   ("📊", "Statistics",      "#34d399",
                       "Dataset statistics, class distribution, feature distributions & correlations"),
-    "performance":   ("🏆", "Model Performance",            "#a78bfa",
+    "performance":   ("🏆", "Performance",     "#a78bfa",
                       "Per-metric comparisons, radar charts, scorecards, ROC curves & training history"),
-    "explainability":("🧠", "Explainability & Prediction",  "#fb923c",
+    "explainability":("🧠", "Explainability",  "#fb923c",
                       "SHAP feature importance, waterfall plots & live email prediction lab"),
 }
 
@@ -2394,6 +2428,53 @@ def _render_tab_explainability(artifacts: PipelineArtifacts) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# NAVIGATION — pages registry + top nav bar renderer
+# ════════════════════════════════════════════════════════════════════════════
+_PAGES: List[Tuple[str, str, str]] = [
+    ("home",           "🏠", "Home"),
+    ("statistics",     "📊", "Statistics"),
+    ("performance",    "🏆", "Performance"),
+    ("explainability", "🧠", "Explainability"),
+]
+
+
+def _render_top_nav() -> None:
+    """Render the session_state-driven top navigation bar.
+
+    Architecture
+    ────────────
+    1. An invisible <span class="nav-anchor"> is injected via st.markdown.
+       The CSS rule  div[data-testid="stVerticalBlock"]:has(.nav-anchor) > …
+       uses this as a scope anchor to apply the dark-tray background ONLY to
+       the nav columns, leaving all other st.columns() calls unstyled.
+
+    2. Four st.button() calls sit inside st.columns(4).
+       • type="primary"   → active pill  (gradient fill, dark text)
+       • type="secondary" → inactive pill (ghost border, muted text)
+
+    3. Clicking a button writes to st.session_state.active_page and calls
+       st.rerun() so the content area re-renders immediately.
+    """
+    active = st.session_state.get("active_page", "home")
+
+    # Invisible anchor consumed only by the CSS :has() selector
+    st.markdown('<span class="nav-anchor" style="display:none;"></span>',
+                unsafe_allow_html=True)
+
+    cols = st.columns(len(_PAGES), gap="small")
+    for col, (page_key, icon, label) in zip(cols, _PAGES):
+        with col:
+            if st.button(
+                f"{icon}  {label}",
+                key=f"nav_{page_key}",
+                use_container_width=True,
+                type="primary" if active == page_key else "secondary",
+            ):
+                st.session_state.active_page = page_key
+                st.rerun()
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # STREAMLIT  — MAIN
 # ════════════════════════════════════════════════════════════════════════════
 if st is not None:
@@ -2416,6 +2497,10 @@ def streamlit_main() -> None:
         initial_sidebar_state="expanded",
     )
     _inject_css()
+
+    # Bootstrap session state on first load
+    if "active_page" not in st.session_state:
+        st.session_state.active_page = "home"
 
     with st.spinner("Loading pipeline (cached after first run)..."):
         artifacts = _get_pipeline_artifacts()
@@ -2453,21 +2538,23 @@ def streamlit_main() -> None:
                 f'• <code style="color:#a78bfa;">{feat}</code></p>',
                 unsafe_allow_html=True)
 
-    # Tab bar
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📊  Executive Summary",
-        "🔍  Descriptive Analytics",
-        "🏆  Model Performance",
-        "🧠  Explainability & Prediction",
-    ])
-    with tab1:
-        _render_tab_executive(artifacts)
-    with tab2:
-        _render_tab_descriptive(artifacts)
-    with tab3:
-        _render_tab_model_performance(artifacts)
-    with tab4:
-        _render_tab_explainability(artifacts)
+    # ── Top navigation bar ────────────────────────────────────────────
+    _render_top_nav()
+
+    # ── Centered content area ─────────────────────────────────────────
+    # st.columns([1, 5, 1]) gives the content column ~71% of the main
+    # area width, horizontally centered regardless of screen size.
+    _, content_col, _ = st.columns([1, 5, 1])
+    with content_col:
+        page = st.session_state.get("active_page", "home")
+        if page == "home":
+            _render_tab_executive(artifacts)
+        elif page == "statistics":
+            _render_tab_descriptive(artifacts)
+        elif page == "performance":
+            _render_tab_model_performance(artifacts)
+        elif page == "explainability":
+            _render_tab_explainability(artifacts)
 
 
 # ════════════════════════════════════════════════════════════════════════════
