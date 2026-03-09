@@ -5,6 +5,7 @@ scikit-learn==1.8.0
 imbalanced-learn==0.14.1
 shap==0.51.0
 matplotlib==3.10.8
+seaborn==0.13.2
 plotly==6.5.2
 joblib==1.5.3
 datasets==4.6.1

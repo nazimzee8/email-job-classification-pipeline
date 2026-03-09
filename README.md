@@ -1,8 +1,12 @@
 # Email Job Classification Pipeline
 
-Small Streamlit app and training pipeline for classifying job-related emails.
+Streamlit app and training pipeline for classifying job-related emails.
 
-## Run the app
+## Public app
+
+Production deployment: https://email-classification-pipeline.streamlit.app
+
+## Run locally
 
 From the repository root:
 
@@ -17,9 +21,23 @@ If PowerShell blocks activation, run Streamlit directly:
 .\Scripts\streamlit.exe run src\streamlit_app.py
 ```
 
-The app will usually be available at `http://localhost:8501`.
+The local app is usually available at `http://localhost:8501`.
 
-## Refresh artifacts
+## Install dependencies
+
+To recreate the environment from pinned dependencies:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+## Pretrained artifacts
+
+The Streamlit app is configured to load pretrained artifacts from `artifacts\` for fast startup. It does not retrain models during normal app boot.
+
+## Rebuild artifacts
 
 To retrain the full pipeline and overwrite the packaged artifacts:
 
@@ -30,12 +48,6 @@ python src\streamlit_app.py --force-retrain
 
 Artifacts are written to the `artifacts\` directory.
 
-## Reinstall dependencies
+## Deployment note
 
-To recreate the environment from pinned dependencies:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
+For Streamlit Cloud, keep `requirements.txt` pinned and ensure the `artifacts\` directory is committed if you want fast boot without retraining.
